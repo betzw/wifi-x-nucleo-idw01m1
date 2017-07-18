@@ -26,11 +26,9 @@ SPWFSA01::SPWFSA01(PinName tx, PinName rx, SpwfSAInterface &ifce, bool debug)
   _pending_sockets_bitmap(0),
   _network_lost_flag(false),
   _associated_interface(ifce),
-  _callback_func(),
   _packets(0), _packets_end(&_packets)
 {
     _serial.baud(115200);
-    _serial.attach(Callback<void()>(this, &SPWFSA01::_event_handler)); /* work around NETSOCKET's timeout bug */
     _parser.debugOn(debug);
 
     _parser.oob("+WIND:55:Pending Data", this, &SPWFSA01::_packet_handler_th);
@@ -517,8 +515,6 @@ bool SPWFSA01::_read_in_packet(int spwf_id, int amount) {
 
 int SPWFSA01::_read_in_packet(int spwf_id) {
     int amount;
-    BlockExecuter netsock_wa_obj(Callback<void()>(this, &SPWFSA01::_unblock_event_callback),
-                                 Callback<void()>(this, &SPWFSA01::_block_event_callback)); /* work around NETSOCKET's timeout bug */
 
     _clear_pending_data(spwf_id);
     amount = _read_len(spwf_id);
@@ -649,19 +645,6 @@ void SPWFSA01::_pending_data_handler(void)
 }
 
 /*
- * Buffered serial event handler
- *
- * Note: executed in IRQ context!
- * Note: work around for NETSOCKET's timeout bug
- *
- */
-void SPWFSA01::_event_handler(void)
-{
-    if((bool)_callback_func && !_is_event_callback_blocked())
-        _callback_func();
-}
-
-/*
  * Handling oob ("+WIND:33:WiFi Network Lost")
  *
  */
@@ -719,9 +702,8 @@ void SPWFSA01::_network_lost_handler_bh(void)
 
     {
         bool were_connected;
-        BlockExecuter netsock_wa_obj(Callback<void()>(this, &SPWFSA01::_unblock_event_callback),
-                                     Callback<void()>(this, &SPWFSA01::_block_event_callback)); /* work around NETSOCKET's timeout bug */
         Timer timer;
+
         timer.start();
 
         _parser.setTimeout(SPWF_NETLOST_TIMEOUT);
@@ -853,10 +835,6 @@ void SPWFSA01::_sock_closed_handler(void)
      */
     internal_id = _associated_interface.get_internal_id(spwf_id);
     _associated_interface._ids[internal_id].spwf_id = SPWFSA_SOCKET_COUNT;
-
-    /* work around NETSOCKET's timeout bug */
-    if((bool)_callback_func)
-        _callback_func();
 }
 
 void SPWFSA01::setTimeout(uint32_t timeout_ms)
@@ -877,7 +855,7 @@ bool SPWFSA01::writeable(void)
 
 void SPWFSA01::attach(Callback<void()> func)
 {
-    _callback_func = func;
+    _serial.attach(func);
 }
 
 bool SPWFSA01::_recv_ap(nsapi_wifi_ap_t *ap)
